@@ -1331,6 +1331,12 @@ void FS_AddGameHierarchy( const char *dir, uint flags )
 		FS_AddGameDirectory( buf, flags|FS_NOWRITE_PATH|FS_CUSTOM_PATH );
 	}
 
+	if( FBitSet( flags, FS_MOUNT_HD ) && FBitSet( flags, FS_MOUNT_ADDON ) )
+	{
+		Q_snprintf( buf, sizeof( buf ), "%s_addon_hd/", dir );
+		FS_AddGameDirectory( buf, flags|FS_NOWRITE_PATH|FS_CUSTOM_PATH );
+	}
+
 	if( FBitSet( flags, FS_MOUNT_LV ))
 	{
 		Q_snprintf( buf, sizeof( buf ), "%s_lv/", dir );
