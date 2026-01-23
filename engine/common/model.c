@@ -55,14 +55,14 @@ static void Mod_Modellist_f( void )
 
 	for( i = nummodels = 0, mod = mod_known; i < mod_numknown; i++, mod++ )
 	{
-		if( !COM_CheckStringEmpty( mod->name ) )
+		if( mod->needload == NL_UNREFERENCED )
 			continue; // free slot
 		Con_Printf( "%s\n", mod->name );
 		nummodels++;
 	}
 
 	Con_Printf( "-----------------------------------\n" );
-	Con_Printf( "%i total models\n", nummodels );
+	Con_Printf( "%i total models, %i total allocated slots\n", nummodels, mod_numknown );
 	Con_Printf( "\n" );
 }
 
@@ -74,7 +74,7 @@ Mod_FreeUserData
 static void Mod_FreeUserData( model_t *mod )
 {
 	// ignore submodels and freed models
-	if( !COM_CheckStringEmpty( mod->name ) || mod->name[0] == '*' )
+	if( mod->needload == NL_UNREFERENCED || mod->name[0] == '*' )
 		return;
 
 	if( Host_IsDedicated() )
@@ -101,7 +101,7 @@ Mod_FreeModel
 void Mod_FreeModel( model_t *mod )
 {
 	// already freed?
-	if( !mod || !COM_CheckStringEmpty( mod->name ) )
+	if( !mod || mod->needload == NL_UNREFERENCED )
 		return;
 
 	if( mod->type != mod_brush || mod->name[0] != '*' )
@@ -230,7 +230,10 @@ model_t *Mod_FindName( const char *filename, qboolean trackCRC )
 
 	// find a free model slot spot
 	for( i = 0, mod = mod_known; i < mod_numknown; i++, mod++ )
-		if( !COM_CheckStringEmpty( mod->name ) ) break; // this is a valid spot
+	{
+		if( mod->needload == NL_UNREFERENCED )
+			break; // this is a valid spot
+	}
 
 	if( i == mod_numknown )
 	{
@@ -264,7 +267,11 @@ model_t *Mod_LoadModel( model_t *mod, qboolean crash )
 	byte		*buf;
 	model_info_t	*p;
 
-	ASSERT( mod != NULL );
+	if( !mod )
+	{
+		Host_Error( "%s: mod == NULL\n", __func__ );
+		return NULL;
+	}
 
 	// check if already loaded (or inline bmodel)
 	if( mod->mempool || mod->name[0] == '*' )
@@ -273,7 +280,11 @@ model_t *Mod_LoadModel( model_t *mod, qboolean crash )
 		return mod;
 	}
 
-	ASSERT( mod->needload == NL_NEEDS_LOADED );
+	if( mod->needload != NL_NEEDS_LOADED )
+	{
+		Host_Error( "%s: trying to load model not marked for loading (%d)\n", __func__, mod->needload );
+		return NULL;
+	}
 
 	// store modelname to show error
 	Q_strncpy( tempname, mod->name, sizeof( tempname ));
@@ -429,9 +440,11 @@ static void Mod_PurgeStudioCache( void )
 	{
 		if( mod_known[i].type == mod_studio )
 			mod_known[i].submodels = NULL;
+
 		if( mod_known[i].name[0] == '*' )
 			Mod_FreeModel( &mod_known[i] );
-		mod_known[i].needload = NL_UNREFERENCED;
+		else
+			mod_known[i].needload = NL_FREE_UNUSED;
 	}
 
 	Mem_EmptyPool( com_studiocache );
@@ -482,7 +495,7 @@ void Mod_FreeUnused( void )
 	// never tries to release worldmodel
 	for( i = 1, mod = &mod_known[1]; i < mod_numknown; i++, mod++ )
 	{
-		if( mod->needload == NL_UNREFERENCED && COM_CheckString( mod->name ))
+		if( mod->needload == NL_FREE_UNUSED )
 			Mod_FreeModel( mod );
 	}
 }

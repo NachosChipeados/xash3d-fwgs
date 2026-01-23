@@ -66,6 +66,9 @@ CVAR_DEFINE( host_developer, "developer", "0", FCVAR_FILTERABLE, "engine is in d
 CVAR_DEFINE_AUTO( sys_timescale, "1.0", FCVAR_FILTERABLE, "scale frame time" );
 
 static CVAR_DEFINE_AUTO( sys_ticrate, "100", FCVAR_SERVER, "framerate in dedicated mode" );
+static CVAR_DEFINE_AUTO( sv_hibernate_when_empty, "1", 0, "lower CPU usage when server has no players" );
+static CVAR_DEFINE_AUTO( sv_hibernate_when_empty_sleep, "500", 0, "sleeptime value when sv_hibernate_when_empty is active" );
+static CVAR_DEFINE_AUTO( sv_hibernate_when_empty_include_bots, "0", 0, "count bots as online players when sv_hibernate_when_empty is active" );
 static CVAR_DEFINE_AUTO( host_serverstate, "0", FCVAR_READ_ONLY, "displays current server state" );
 static CVAR_DEFINE_AUTO( host_gameloaded, "0", FCVAR_READ_ONLY, "inidcates a loaded game.dll" );
 static CVAR_DEFINE_AUTO( host_clientloaded, "0", FCVAR_READ_ONLY, "inidcates a loaded client.dll" );
@@ -352,6 +355,19 @@ static int Host_CalcSleep( void )
 {
 	if( Host_IsDedicated( ))
 	{
+		if( sv_hibernate_when_empty.value )
+		{
+			int players, bots;
+
+			SV_GetPlayerCount( &players, &bots );
+
+			if( sv_hibernate_when_empty_include_bots.value )
+				players += bots;
+
+			if( players == 0 )
+				return sv_hibernate_when_empty_sleep.value;
+		}
+
 		// let the dedicated server some sleep
 		return host_sleeptime.value;
 	}
@@ -656,10 +672,9 @@ static double Host_CalcFPS( void )
 
 static qboolean Host_Autosleep( double dt, double scale )
 {
-	double targetframetime, fps;
+	double targetframetime;
 	int sleep;
-
-	fps = Host_CalcFPS();
+	double fps = Host_CalcFPS();
 
 	if( fps <= 0 )
 		return true;
@@ -669,10 +684,11 @@ static qboolean Host_Autosleep( double dt, double scale )
 
 	if( Host_IsDedicated( ))
 		targetframetime = ( 1.0 / ( fps + 1.0 ));
-	else targetframetime = ( 1.0 / fps );
+	else
+		targetframetime = ( 1.0 / fps );
 
 	sleep = Host_CalcSleep();
-	if( sleep == 0 ) // no sleeps between frames, much simpler code
+	if( sleep <= 0 ) // no sleeps between frames, much simpler code
 	{
 		if( dt < targetframetime * scale )
 			return false;
@@ -691,18 +707,18 @@ static qboolean Host_Autosleep( double dt, double scale )
 			{
 				// Platform_Sleep isn't guaranteed to sleep an exact amount of microseconds
 				// so we measure the real sleep time and use it to decrease the window
-				double t1 = Platform_DoubleTime(), t2;
-				Platform_NanoSleep( sleep * 1000 ); // in usec!
-				t2 = Platform_DoubleTime();
-				realsleeptime = t2 - t1;
+				double t = Platform_DoubleTime();
 
+				Platform_NanoSleep( sleep * 1000 * 100 ); // sleeptime 1 ~ 100 usecs
+
+				realsleeptime = Platform_DoubleTime() - t;
 				timewindow -= realsleeptime;
 
 				if( host_sleeptime_debug.value )
 				{
 					counter++;
 
-					Con_NPrintf( counter, "%d: %.4f %.4f", counter, timewindow, realsleeptime );
+					Con_NPrintf( counter, "%d: %.6f %.6f", counter, timewindow, realsleeptime );
 				}
 			}
 
@@ -716,7 +732,8 @@ static qboolean Host_Autosleep( double dt, double scale )
 
 			if( targetsleeptime > 0 )
 				timewindow = targetsleeptime;
-			else timewindow = 0;
+			else
+				timewindow = 0;
 
 			realsleeptime = sleeptime; // reset in case CPU was too busy
 
@@ -1007,13 +1024,12 @@ Host_InitCommon
 static void Host_InitCommon( int argc, char **argv, const char *progname, qboolean bChangeGame, char *exename, size_t exename_size )
 {
 	const char *basedir = progname[0] == '#' ? progname + 1 : progname;
-	char dev_level[4], ticrate[16];
-	int developer = DEFAULT_DEV;
+	int ticrate, developer = DEFAULT_DEV;
 
 	// some commands may turn engine into infinite loop,
 	// e.g. xash.exe +game xash -game xash
 	// so we clear all cmd_args, but leave dbg states as well
-	Sys_ParseCommandLine( argc, argv );
+	Sys_ParseCommandLine( argc, (const char **)argv );
 	Host_DetermineExecutableName( exename, exename_size );
 
 	if( !Sys_CheckParm( "-disablehelp" ))
@@ -1031,6 +1047,7 @@ static void Host_InitCommon( int argc, char **argv, const char *progname, qboole
 	host.config_executed = false;
 	host.status = HOST_INIT; // initialzation started
 	host.type = HOST_DEDICATED; // predict state
+
 #ifndef XASH_DEDICATED
 	if( !Sys_CheckParm( "-dedicated" ))
 		host.type = HOST_NORMAL;
@@ -1047,11 +1064,8 @@ static void Host_InitCommon( int argc, char **argv, const char *progname, qboole
 		host.allow_console = true;
 		developer = DEV_NORMAL;
 
-		if( Sys_GetParmFromCmdLine( "-dev", dev_level ))
-		{
-			if( Q_isdigit( dev_level ))
-				developer = bound( DEV_NONE, abs( Q_atoi( dev_level )), DEV_EXTENDED );
-		}
+		if( Sys_GetIntFromCmdLine( "-dev", &developer ))
+			developer = bound( DEV_NONE, developer, DEV_EXTENDED );
 	}
 
 #if XASH_ENGINE_TESTS
@@ -1085,15 +1099,11 @@ static void Host_InitCommon( int argc, char **argv, const char *progname, qboole
 	Cvar_Init();
 
 	// share developer level across all dlls
-	Q_snprintf( dev_level, sizeof( dev_level ), "%i", developer );
-	Cvar_DirectSet( &host_developer, dev_level );
+	Cvar_DirectSetValue( &host_developer, developer );
 	Cvar_RegisterVariable( &sys_ticrate );
 
-	if( Sys_GetParmFromCmdLine( "-sys_ticrate", ticrate ))
-	{
-		double fps = bound( MIN_FPS, atof( ticrate ), MAX_FPS_HARD );
-		Cvar_SetValue( "sys_ticrate", fps );
-	}
+	if( Sys_GetIntFromCmdLine( "-sys_ticrate", &ticrate ))
+		Cvar_DirectSetValue( &sys_ticrate, bound( MIN_FPS, ticrate, MAX_FPS_HARD ));
 
 	Sys_InitLog();
 	Con_Init(); // early console running to catch all the messages
@@ -1213,6 +1223,9 @@ int EXPORT Host_Main( int argc, char **argv, const char *progname, int bChangeGa
 	Cvar_RegisterVariable( &host_limitlocal );
 	Cvar_RegisterVariable( &con_gamemaps );
 	Cvar_RegisterVariable( &sys_timescale );
+	Cvar_RegisterVariable( &sv_hibernate_when_empty );
+	Cvar_RegisterVariable( &sv_hibernate_when_empty_include_bots );
+	Cvar_RegisterVariable( &sv_hibernate_when_empty_sleep );
 
 	Cvar_Getf( "buildnum", FCVAR_READ_ONLY, "returns a current build number", "%i", Q_buildnum_compat());
 	Cvar_Getf( "ver", FCVAR_READ_ONLY, "shows an engine version", "%i/%s (hw build %i)", PROTOCOL_VERSION, XASH_COMPAT_VERSION, Q_buildnum_compat());

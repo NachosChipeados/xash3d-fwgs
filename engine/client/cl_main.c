@@ -99,6 +99,7 @@ CVAR_DEFINE_AUTO( rate, "25000", FCVAR_USERINFO|FCVAR_ARCHIVE|FCVAR_FILTERABLE, 
 static CVAR_DEFINE_AUTO( cl_ticket_generator, "revemu2013", FCVAR_ARCHIVE, "you wouldn't steal a car" );
 static CVAR_DEFINE_AUTO( cl_advertise_engine_in_name, "1", FCVAR_ARCHIVE|FCVAR_PRIVILEGED, "add [Xash3D] to the nickname when connecting to GoldSrc servers" );
 static CVAR_DEFINE_AUTO( cl_log_outofband, "0", FCVAR_ARCHIVE, "log out of band messages, can be useful for server admins and for engine debugging" );
+static CVAR_DEFINE_AUTO( cl_autorecord, "0", 0, "automatically start recording a demo after joining the server" );
 
 client_t		cl;
 client_static_t	cls;
@@ -175,16 +176,23 @@ connprotocol_t CL_Protocol( void )
 
 void CL_SetCheatState( qboolean multiplayer, qboolean allow_cheats )
 {
+	uint flags;
+
 	if( NET_NetadrType( &cls.netchan.remote_address ) == NA_LOOPBACK )
 		return;
 
+	if( cls.demoplayback )
+		flags = FCVAR_SERVER;
+	else
+		flags = FCVAR_SERVER | FCVAR_READ_ONLY;
+
 	if( allow_cheats )
 	{
-		Cvar_FullSet( "sv_cheats", "1", FCVAR_READ_ONLY | FCVAR_SERVER );
+		Cvar_FullSet( "sv_cheats", "1", flags );
 	}
 	else
 	{
-		Cvar_FullSet( "sv_cheats", "0", FCVAR_READ_ONLY | FCVAR_SERVER );
+		Cvar_FullSet( "sv_cheats", "0", flags );
 		Cvar_SetCheatState();
 	}
 }
@@ -224,6 +232,14 @@ static void CL_CheckClientState( void )
 		}
 
 		Con_DPrintf( "client connected at %.2f sec\n", Platform_DoubleTime() - cls.timestart );
+
+		if( cl_autorecord.value && !cls.demoplayback )
+		{
+			if( cls.demorecording )
+				CL_Stop_f();
+
+			Cbuf_AddTextf( "record %s_%s\n", Q_timestamp( TIME_FILENAME ), clgame.mapname );
+		}
 	}
 }
 
@@ -3328,6 +3344,7 @@ static void CL_InitLocal( void )
 	Cvar_RegisterVariable( &cl_ticket_generator );
 	Cvar_RegisterVariable( &cl_advertise_engine_in_name );
 	Cvar_RegisterVariable( &cl_log_outofband );
+	Cvar_RegisterVariable( &cl_autorecord );
 
 	Cvar_RegisterVariable( &showpause );
 	Cvar_RegisterVariable( &mp_decals );
